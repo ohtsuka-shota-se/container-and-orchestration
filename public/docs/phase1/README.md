@@ -5,10 +5,10 @@
 | フェーズ | テーマ | 想定時間 | ステータス |
 |---|---|---|---|
 | **Phase 1** | **Dockerコンテナ基礎** | **6〜8 時間** | ✅ 公開中 |
-| Phase 2 | イメージ作成・管理 | 4〜6 時間 | 🚧 準備中 |
-| Phase 3 | Docker Compose | 4〜6 時間 | 🚧 準備中 |
-| Phase 4 | Docker Swarm | 4〜6 時間 | 🚧 準備中 |
-| Phase 5 | Kubernetes 入門 | 8〜10 時間 | 🚧 準備中 |
+| Phase 2 | イメージ作成・管理 | 4〜6 時間 | ✅ 公開中 |
+| Phase 3 | Docker Compose | 4〜6 時間 | ✅ 公開中 |
+| Phase 4 | Docker Swarm | 4〜6 時間 | ✅ 公開中 |
+| Phase 5 | Kubernetes 入門 | 8〜10 時間 | ✅ 公開中 |
 
 **対象：** LPIC Level 1 合格者 ／ **形式：** 座学 + ハンズオン + シナリオ演習
 
@@ -69,16 +69,49 @@
 ## ディレクトリ構成
 
 ```
-docker-curriculum/
-├── phase1/
-│   ├── README.md                    ← このファイル
-│   ├── 1-1_why-containers.md
-│   ├── 1-2_install-and-first-run.md
-│   ├── 1-3_container-basics.md
-│   └── 1-4_scenario.md
-└── appendix/
-    ├── cheatsheet-phase1.md
-    ├── architecture-diagrams.md
-    ├── glossary.md
-    └── troubleshooting.md
+container-and-orchestration/
+├── hands-on/                        ← ハンズオン用ファイル（クローンして使う）
+│   ├── phase2/todo-api/             （Flask API・Dockerfile）
+│   ├── phase3/wordpress/            （Compose 演習）
+│   ├── phase4/swarm-demo/           （Swarm Stack 演習）
+│   └── phase5/k8s-todo/, k8s-mysql/ （K8s マニフェスト）
+└── docs/
+    ├── phase1/                      ← このフェーズ
+    │   ├── README.md
+    │   ├── 1-1_why-containers.md
+    │   ├── 1-2_install-and-first-run.md
+    │   ├── 1-3_container-basics.md
+    │   └── 1-4_scenario.md
+    ├── phase2/
+    │   ├── README.md
+    │   ├── 2-1_dockerfile.md
+    │   ├── 2-2_multistage.md
+    │   ├── 2-3_registry.md
+    │   └── 2-4_scenario.md
+    ├── phase3/
+    │   ├── README.md
+    │   ├── 3-1_compose-basics.md
+    │   ├── 3-2_compose-operations.md
+    │   ├── 3-3_networks-volumes.md
+    │   └── 3-4_scenario.md
+    ├── phase4/
+    │   ├── README.md
+    │   ├── 4-1_swarm-intro.md
+    │   ├── 4-2_cluster-setup.md
+    │   ├── 4-3_services.md
+    │   ├── 4-4_stack.md
+    │   └── 4-5_scenario.md
+    ├── phase5/
+    │   ├── README.md
+    │   ├── 5-1_k8s-overview.md
+    │   ├── 5-2_local-setup.md
+    │   ├── 5-3_core-resources.md
+    │   ├── 5-4_config-storage.md
+    │   └── 5-5_scenario.md
+    └── appendix/
+        ├── cheatsheet-phase1.md
+        ├── cheatsheet-phase2-5.md
+        ├── architecture-diagrams.md
+        ├── glossary.md
+        └── troubleshooting.md
 ```

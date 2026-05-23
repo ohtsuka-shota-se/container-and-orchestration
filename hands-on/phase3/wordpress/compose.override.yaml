@@ -1,0 +1,9 @@
+# 開発環境でのみ有効な追加設定（compose.yaml に自動マージされる）
+services:
+  db:
+    ports:
+      - "3306:3306"   # 開発時はホストから直接 DB に接続できるようにする
+
+  wordpress:
+    environment:
+      WORDPRESS_DEBUG: "1"   # デバッグログを有効化

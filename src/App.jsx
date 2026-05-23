@@ -208,8 +208,23 @@ function CodeBlock({ children, lang, t }) {
   );
 }
 
+// ── 内部リンクのパス解決 ───────────────────────────────────────
+// currentId="phase1/README", href="../appendix/cheatsheet-phase1.md"
+// → "appendix/cheatsheet-phase1"
+function resolveInternalLink(currentId, href) {
+  const [path] = href.split("#");
+  const withoutMd = path.replace(/\.md$/, "");
+  const dir = currentId.split("/").slice(0, -1);
+  const resolved = [...dir];
+  for (const part of withoutMd.split("/")) {
+    if (part === "..") resolved.pop();
+    else if (part && part !== ".") resolved.push(part);
+  }
+  return resolved.join("/");
+}
+
 // ── Markdown カスタムコンポーネント ────────────────────────────
-function getMdComponents(t) {
+function getMdComponents(t, activeId, go) {
   return {
     pre({ children }) {
       const child = Array.isArray(children) ? children[0] : children;
@@ -226,7 +241,15 @@ function getMdComponents(t) {
     h2: ({ children }) => <h2 style={{ fontSize: "1.1em", fontWeight: 700, color: t.h2Color, margin: "24px 0 8px" }}>{children}</h2>,
     h3: ({ children }) => <h3 style={{ fontSize: "0.97em", fontWeight: 700, color: t.h3Color, margin: "16px 0 6px" }}>{children}</h3>,
     p: ({ children }) => <p style={{ color: t.textSub, fontSize: "0.9em", lineHeight: 1.75, margin: "6px 0" }}>{children}</p>,
-    a: ({ href, children }) => <a href={href} style={{ color: t.accent, textDecoration: "underline" }} target="_blank" rel="noopener noreferrer">{children}</a>,
+    a: ({ href, children }) => {
+      if (!href) return <span>{children}</span>;
+      const isExternal = href.startsWith("http://") || href.startsWith("https://") || href.startsWith("//");
+      if (isExternal) {
+        return <a href={href} style={{ color: t.accent, textDecoration: "underline" }} target="_blank" rel="noopener noreferrer">{children}</a>;
+      }
+      const id = resolveInternalLink(activeId, href);
+      return <a href={"#" + id} onClick={(e) => { e.preventDefault(); go(id); }} style={{ color: t.accent, textDecoration: "underline", cursor: "pointer" }}>{children}</a>;
+    },
     blockquote: ({ children }) => (
       <blockquote style={{ borderLeft: `3px solid ${t.accent}`, margin: "10px 0", padding: "8px 14px", background: t.blockquoteBg, borderRadius: "0 8px 8px 0", color: t.blockquoteText, fontSize: "0.9em" }}>
         {children}
@@ -375,7 +398,7 @@ export default function App() {
   const next = pages[curIdx + 1];
   const curItem = pages[curIdx];
 
-  const mdComponents = useMemo(() => getMdComponents(t), [t]);
+  const mdComponents = useMemo(() => getMdComponents(t, activeId, go), [t, activeId]);
 
   const SidebarContent = () => (
     <div style={{ overflowY: "auto", flex: 1, padding: "8px 0" }}>
