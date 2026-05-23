@@ -1,16 +1,41 @@
-# React + Vite
+# コンテナ・オーケストレーション ハンズオンカリキュラム
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Docker のコンテナ基礎からはじめ、イメージ作成・Docker Compose・Docker Swarm・Kubernetes まで、
+段階的にコンテナ技術の実務スキルを習得するハンズオンカリキュラム。
 
-Currently, two official plugins are available:
+## 📖 カリキュラムビューア
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+👉 **https://ohtsuka-shota-se.github.io/container-and-orchestration/**
 
-## React Compiler
+カリキュラムビューアを見ながら学習を進めてください。
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 📁 構成
 
-## Expanding the ESLint configuration
+```
+container-and-orchestration/
+├── public/
+│   └── docs/                        # カリキュラム本体（Markdown）
+│       ├── manifest.json            # ナビゲーション定義
+│       ├── phase1/                  # Dockerコンテナ基礎
+│       ├── phase2/                  # イメージ作成・管理
+│       ├── phase3/                  # Docker Compose
+│       ├── phase4/                  # Docker Swarm
+│       ├── phase5/                  # Kubernetes入門
+│       └── appendix/                # チートシート・用語集・補足資料
+├── src/
+│   └── App.jsx                      # カリキュラムビューア（Vite + React）
+└── .github/
+    └── workflows/
+        └── deploy.yml               # 自動ビルド・デプロイ
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## 📚 カリキュラム内容
+
+| Phase | テーマ | 内容 |
+|-------|--------|------|
+| Phase 1 | Dockerコンテナ基礎 | なぜコンテナか・インストール・基本操作・シナリオ演習 |
+| Phase 2 | イメージ作成・管理 | Dockerfile・マルチステージビルド・レジストリ・シナリオ演習 |
+| Phase 3 | Docker Compose | Compose基礎・操作と環境変数・ネットワーク/ボリューム・シナリオ演習 |
+| Phase 4 | Docker Swarm | Swarm概念・クラスタ構築・Service/スケール・Stackデプロイ・シナリオ演習 |
+| Phase 5 | Kubernetes入門 | K8s全体像・ローカル環境・Pod/Deployment/Service・設定/ストレージ・シナリオ演習 |
+| 補足資料 | Appendix | チートシート・用語集・トラブル対応・アーキテクチャ図集 |
