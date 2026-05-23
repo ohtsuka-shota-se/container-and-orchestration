@@ -4,6 +4,7 @@
 
 - これまで学んだコマンドを組み合わせて実際の作業を完遂する
 - トラブルに当たったとき自力でデバッグできる
+- 複数コンテナをネットワークで連携させる基本パターンを実践する
 
 ---
 
@@ -58,8 +59,9 @@ curl http://localhost:8080
 
 # ブラウザで確認 → http://localhost:8080
 
-# コンテナのログを確認
+# コンテナのログを確認（アクセスログが流れる）
 docker logs notice-web
+docker logs -f notice-web   # リアルタイム
 ```
 
 ### Step 4：HTML を更新してみる
@@ -83,7 +85,21 @@ EOF
 curl http://localhost:8080
 ```
 
-### Step 5：後片付け
+### Step 5：コンテナの内側を調べる
+
+```bash
+# コンテナの中に入って確認
+docker exec -it notice-web bash
+
+# コンテナ内で以下を確認
+ps aux              # nginx のプロセスだけ
+ls /usr/share/nginx/html/   # マウントしたファイルが見える
+cat /etc/nginx/nginx.conf   # nginx の設定
+hostname            # ランダムなホスト名（コンテナ ID と同じ）
+exit
+```
+
+### Step 6：後片付け
 
 ```bash
 docker stop notice-web
@@ -97,6 +113,7 @@ docker rm notice-web
 | `port is already allocated` | 8080 ポートが他で使われている | `-p 8081:80` など別ポートを使う |
 | `curl` で 403 Forbidden | index.html が存在しない or パーミッション問題 | `ls -la` でファイル確認 |
 | コンテナがすぐ終了する | `-d` をつけ忘れ or エラー | `docker logs <ID>` でエラー確認 |
+| マウントしたファイルが見えない | パスが相対パスになっている | `$(pwd)` を使って絶対パスにする |
 
 ---
 
@@ -156,6 +173,16 @@ EXIT;
 mysql -h 127.0.0.1 -P 3306 -u appuser -papppass sampledb
 ```
 
+#### 方法③：MySQL Workbench や DBeaver などの GUI ツール
+
+```
+Host: 127.0.0.1
+Port: 3306
+User: appuser
+Password: apppass
+Database: sampledb
+```
+
 ### Step 4：データの永続化を確認する
 
 ```bash
@@ -201,9 +228,95 @@ docker volume rm mysql-data
 
 ---
 
-## 🏆 発展課題
+## シナリオ C：2 つのコンテナをネットワークで連携させる
 
-余力がある人は以下も試してみよう。
+### 背景
+
+> Nginx と PHP-FPM を別々のコンテナで動かし、コンテナ名で通信させてみよう。  
+> Docker のカスタムネットワークを使った「コンテナ間通信」の基本パターンを学ぶ。
+
+### Step 1：カスタムネットワークを作成
+
+```bash
+docker network create app-net
+
+# 作成確認
+docker network ls | grep app-net
+```
+
+### Step 2：バックエンドサービス（Python HTTP サーバー）を起動
+
+```bash
+# シンプルな Python HTTP サーバーをバックエンドとして使う
+docker run -d \
+  --name backend \
+  --network app-net \
+  python:3.12-slim \
+  python -m http.server 8000
+```
+
+### Step 3：フロントエンド（curl を使う確認用コンテナ）を起動
+
+```bash
+# curl が使えるコンテナを起動して、backend への通信を試す
+docker run -it --rm \
+  --network app-net \
+  curlimages/curl \
+  curl http://backend:8000/
+
+# backend というコンテナ名でアクセスできた！
+# （IP アドレスを知らなくてもサービス名で通信できる）
+```
+
+### Step 4：名前解決の仕組みを確認
+
+```bash
+# ネットワークの詳細を確認
+docker network inspect app-net
+
+# 出力の "Containers" セクションに backend の IP が表示される
+# {
+#   "backend": {
+#     "IPv4Address": "172.20.0.2/16"   ← この IP を知らなくても "backend" で通信できた
+#   }
+# }
+
+# backend の中から DNS 解決を確認
+docker exec backend sh -c "cat /etc/resolv.conf"
+# nameserver 127.0.0.11   ← Docker の内蔵 DNS サーバー
+```
+
+### Step 5：別のネットワークからは通信できないことを確認
+
+```bash
+# 別ネットワークのコンテナを起動
+docker run -d --name other-container nginx
+
+# other-container から backend に通信しようとしても失敗する
+docker exec other-container curl http://backend:8000/
+# curl: (6) Could not resolve host: backend
+
+# 理由: other-container は app-net に参加していない
+```
+
+### Step 6：後片付け
+
+```bash
+docker rm -f backend other-container
+docker network rm app-net
+```
+
+### ❓ 詰まりやすいポイント
+
+| 症状 | 原因 | 対処 |
+|---|---|---|
+| `Could not resolve host` | 同じネットワークに入っていない | `--network` オプションを確認 |
+| `Connection refused` | バックエンドがまだ起動中 | `docker logs backend` で確認 |
+| デフォルト bridge では通信できない | デフォルト bridge では DNS が効かない | カスタムネットワークを作成する |
+
+---
+
+## 🏆 発展課題
 
 ### 課題 1：Nginx のカスタム設定ファイルを使う
 
@@ -229,8 +342,20 @@ docker run -it --rm ubuntu bash
 ps aux                    # プロセスが少ない（隔離されている）
 cat /etc/os-release       # ホストと違う OS
 hostname                  # ランダムなホスト名
-ip addr                   # 独立したネットワーク
+ip addr                   # 独立したネットワーク（172.x.x.x の IP）
 ls /                      # ファイルシステムも独立
+cat /proc/1/cmdline       # PID 1 は bash（通常はinitだが、コンテナ内では別）
+```
+
+### 課題 3：リソース制限を体感する
+
+```bash
+# メモリ 64MB に制限して stress テスト
+docker run --rm --memory=64m polinux/stress stress --vm 1 --vm-bytes 128M
+# OOM（Out of Memory）で kill されるはず
+
+# 別ターミナルで状況を監視
+docker stats
 ```
 
 ---
@@ -241,6 +366,8 @@ ls /                      # ファイルシステムも独立
 - [ ] ホスト側の HTML を変更してコンテナに即反映されることを確認した
 - [ ] MySQL コンテナを起動して SQL を実行できた
 - [ ] コンテナ削除後もボリュームにデータが残ることを確認した
+- [ ] カスタムネットワークでコンテナ名を使って通信できた
+- [ ] 別ネットワークからは通信できないことを確認した
 - [ ] トラブルが起きたとき `docker logs` でデバッグできた
 
 ---
@@ -250,10 +377,13 @@ ls /                      # ファイルシステムも独立
 お疲れさまでした。Phase 1 では以下を習得しました：
 
 - コンテナと VM の違い / namespace と cgroup の役割
-- Docker Engine のアーキテクチャ
+- Docker・containerd・Podman の違いと使い分け
+- Docker Engine のアーキテクチャ（dockerd → containerd → runc）
 - イメージ・コンテナ・レジストリ・レイヤーの概念
+- Union FS（OverlayFS）によるレイヤー管理
 - `run / stop / start / rm / exec / logs` の基本操作
 - ポートマッピングとボリュームマウント
+- カスタムネットワークによるコンテナ間通信
 
 ---
 

@@ -1,50 +1,23 @@
 # アーキテクチャ図集
 
-各 Phase の構成をテキスト図でまとめています。
+各 Phase の構成を図でまとめています。
 
 ---
 
 ## Phase 1：Docker Engine の構造
 
-```
-┌─────────────────────────────────────────────────┐
-│                   開発者                         │
-└─────────────────────────────────────────────────┘
-                       │
-                 docker コマンド
-                       │  REST API（Unix Socket）
-                       ▼
-┌─────────────────────────────────────────────────┐
-│               Docker Daemon（dockerd）           │
-│                                                  │
-│  ・CLI からの命令を受け付ける                     │
-│  ・イメージ管理・ネットワーク管理                 │
-└─────────────────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────┐
-│                  containerd                      │
-│                                                  │
-│  ・コンテナのライフサイクル管理                   │
-│  ・イメージの pull / push                        │
-│  ・スナップショット管理                           │
-└─────────────────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────┐
-│                    runc                          │
-│                                                  │
-│  ・namespace を設定                              │
-│  ・cgroup を設定                                 │
-│  ・コンテナプロセスを起動                         │
-└─────────────────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────┐
-│              Linux カーネル                      │
-│                                                  │
-│  namespace / cgroup / OverlayFS                  │
-└─────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+  Dev["👤 開発者"]
+  Dockerd["🐳 Docker Daemon（dockerd）\nCLIからの命令を受け付ける\nイメージ管理・ネットワーク管理"]
+  Containerd["containerd\nコンテナのライフサイクル管理\nイメージの pull / push\nスナップショット管理"]
+  Runc["runc\nnamespace を設定\ncgroup を設定\nコンテナプロセスを起動"]
+  Kernel["🐧 Linux カーネル\nnamespace / cgroup / OverlayFS"]
+
+  Dev -->|"docker コマンド\nREST API（Unix Socket）"| Dockerd
+  Dockerd --> Containerd
+  Containerd --> Runc
+  Runc --> Kernel
 ```
 
 ---
@@ -53,215 +26,185 @@
 
 ### 仮想マシン
 
-```
-┌────────────────┐  ┌────────────────┐
-│   アプリ A     │  │   アプリ B     │
-│   ライブラリ   │  │   ライブラリ   │
-│   Guest OS     │  │   Guest OS     │
-│   (Ubuntu)     │  │   (CentOS)     │
-└────────────────┘  └────────────────┘
-         ↑                  ↑
-┌──────────────────────────────────────┐
-│          Hypervisor                  │
-│   (KVM / VMware / VirtualBox)        │
-└──────────────────────────────────────┘
-┌──────────────────────────────────────┐
-│          Host OS                     │
-└──────────────────────────────────────┘
-┌──────────────────────────────────────┐
-│          物理ハードウェア             │
-└──────────────────────────────────────┘
+```mermaid
+flowchart TB
+  subgraph VM["仮想マシン"]
+    direction LR
+    AppA["アプリ A\nライブラリ\nGuest OS（Ubuntu）"]
+    AppB["アプリ B\nライブラリ\nGuest OS（CentOS）"]
+  end
+  Hypervisor["Hypervisor\nKVM / VMware / VirtualBox"]
+  HostOS["Host OS"]
+  HW["物理ハードウェア"]
+
+  VM --> Hypervisor --> HostOS --> HW
 ```
 
 ### コンテナ
 
-```
-┌──────────┐  ┌──────────┐  ┌──────────┐
-│  アプリA │  │  アプリB │  │  アプリC │
-│  ライブラリ│  │  ライブラリ│  │  ライブラリ│
-└──────────┘  └──────────┘  └──────────┘
-       ↑            ↑             ↑
-┌───────────────────────────────────────┐
-│           Docker Engine               │
-└───────────────────────────────────────┘
-┌───────────────────────────────────────┐
-│           Host OS（Linux）            │
-│   カーネルを全コンテナで共有          │
-└───────────────────────────────────────┘
-┌───────────────────────────────────────┐
-│           物理ハードウェア             │
-└───────────────────────────────────────┘
+```mermaid
+flowchart TB
+  subgraph Containers["コンテナ（ゲスト OS なし）"]
+    direction LR
+    CA["アプリ A\nライブラリ"]
+    CB["アプリ B\nライブラリ"]
+    CC["アプリ C\nライブラリ"]
+  end
+  Engine["🐳 Docker Engine"]
+  HostOS2["Host OS（Linux）\nカーネルを全コンテナで共有"]
+  HW2["物理ハードウェア"]
+
+  Containers --> Engine --> HostOS2 --> HW2
 ```
 
 ---
 
 ## Phase 1：イメージ・コンテナ・レジストリの関係
 
+```mermaid
+flowchart TD
+  Registry["☁️ Docker Hub（レジストリ）\nnginx:latest　mysql:8.0\npython:3.12　ubuntu:22.04"]
+  LocalStore["🗄️ ローカル イメージストア\nnginx:latest\nmysql:8.0"]
+  C1["📦 コンテナ①\nnginx / port:8080"]
+  C2["📦 コンテナ②\nnginx / port:8081"]
+
+  Registry -->|"docker pull（自動）"| LocalStore
+  LocalStore -->|"docker run"| C1
+  LocalStore -->|"docker run"| C2
 ```
-┌─────────────────────────────────────┐
-│        Docker Hub（レジストリ）      │
-│                                     │
-│   nginx:latest   mysql:8.0          │
-│   python:3.12    ubuntu:22.04       │
-└─────────────────────────────────────┘
-          │ docker pull（自動）
-          ▼
-┌─────────────────────────────────────┐
-│        ローカル イメージストア       │
-│                                     │
-│   nginx:latest                      │
-│   mysql:8.0                         │
-└─────────────────────────────────────┘
-          │ docker run
-          ▼
-┌──────────────┐  ┌──────────────┐
-│  コンテナ①  │  │  コンテナ②  │
-│  nginx       │  │  nginx       │
-│  port: 8080  │  │  port: 8081  │
-└──────────────┘  └──────────────┘
-  同じイメージから複数コンテナを起動できる
-```
+
+> 同じイメージから複数のコンテナを起動できる
 
 ---
 
 ## Phase 1：レイヤー構造
 
-```
-nginx:latest イメージ
-│
-├── Layer 4（nginx 設定）       ← nginx のデフォルト設定
-├── Layer 3（nginx バイナリ）   ← apt install nginx
-├── Layer 2（apt パッケージ）   ← apt update
-└── Layer 1（Debian base）     ← FROM debian:bookworm-slim
-          ↑
-          この Layer は他の Debian ベースイメージと共有
-```
+```mermaid
+flowchart BT
+  L1_nginx["Layer 1\nDebian base\n← FROM debian:bookworm-slim"]
+  L2_nginx["Layer 2\napt パッケージ\n← apt update"]
+  L3_nginx["Layer 3\nnginx バイナリ\n← apt install nginx"]
+  L4_nginx["Layer 4\nnginx 設定\n← デフォルト設定"]
 
-```
-python:3.12 イメージ
-│
-├── Layer 5（pip パッケージ）
-├── Layer 4（Python バイナリ）
-├── Layer 3（ビルドツール）
-├── Layer 2（apt パッケージ）
-└── Layer 1（Debian base）  ← nginx と共有！ストレージ節約
+  L1_nginx --> L2_nginx --> L3_nginx --> L4_nginx
+
+  L1_py["Layer 1\nDebian base ★共有"]
+  L2_py["Layer 2\napt パッケージ"]
+  L3_py["Layer 3\nビルドツール"]
+  L4_py["Layer 4\nPython バイナリ"]
+  L5_py["Layer 5\npip パッケージ"]
+
+  L1_py --> L2_py --> L3_py --> L4_py --> L5_py
+
+  note["★ Layer 1（Debian base）は\nnginx と python で共有\n→ ストレージ節約"]
+  L1_nginx -. 共有 .-> note
+  L1_py -. 共有 .-> note
 ```
 
 ---
 
 ## Phase 1：ポートマッピング
 
-```
-ブラウザ / curl
-     │
-     │ http://localhost:8080
-     ▼
-┌────────────────────────────────┐
-│          Host OS               │
-│   0.0.0.0:8080 ─────────────┐ │
-└─────────────────────────────│─┘
-                              │ -p 8080:80
-┌─────────────────────────────│─┐
-│        Docker Network       │ │
-│                             ▼ │
-│             ┌──────────────────────┐ │
-│             │ nginx コンテナ       │ │
-│             │ 0.0.0.0:80 でLISTEN │ │
-│             └──────────────────────┘ │
-└────────────────────────────────┘
+```mermaid
+flowchart LR
+  Browser["🌐 ブラウザ / curl\nhttp://localhost:8080"]
+  Host["Host OS\n0.0.0.0:8080"]
+  Container["📦 nginx コンテナ\n0.0.0.0:80 で LISTEN"]
+
+  Browser -->|HTTP| Host
+  Host -->|"-p 8080:80"| Container
 ```
 
 ---
 
 ## Phase 1：ボリュームマウント
 
-### バインドマウント
+```mermaid
+flowchart LR
+  subgraph Bind["バインドマウント"]
+    HostDir["🗂️ Host\n/home/user/mysite/\n  index.html\n  about.html"]
+    ContDir["📦 コンテナ\n/usr/share/nginx/html/"]
+    HostDir <-->|"変更が即反映"| ContDir
+  end
 
-```
-Host ファイルシステム           コンテナ
-/home/user/mysite/         →   /usr/share/nginx/html/
-  index.html                     index.html
-  about.html                     about.html
-  ← 変更が即反映 →
-```
-
-### 名前付きボリューム
-
-```
-Docker管理領域
-/var/lib/docker/volumes/
-  mysql-data/              →   /var/lib/mysql/
-    _data/                       （MySQL データ）
-      *.ibd
-      *.frm
-コンテナを削除してもデータは残る
+  subgraph Named["名前付きボリューム"]
+    Volume["🗄️ Docker 管理領域\n/var/lib/docker/volumes/mysql-data/"]
+    ContDB["📦 コンテナ\n/var/lib/mysql/"]
+    Volume <-->|"コンテナ削除後もデータ保持"| ContDB
+  end
 ```
 
 ---
 
 ## Phase 3：Docker Compose 構成例
 
-```
-compose.yaml で定義
-┌────────────────────────────────────────────────┐
-│                   Project                      │
-│                                                │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
-│  │   web    │  │   db     │  │  cache   │    │
-│  │ (nginx)  │  │ (mysql)  │  │ (redis)  │    │
-│  │ port:80  │  │          │  │          │    │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘    │
-│       │              │              │          │
-│  ┌────┴──────────────┴──────────────┴──────┐  │
-│  │         自動生成された Bridge Network    │  │
-│  └─────────────────────────────────────────┘  │
-│                                                │
-│  Volume: db-data  Volume: cache-data           │
-└────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  subgraph Project["compose.yaml Project"]
+    Web["🌐 web\nnginx / port:80"]
+    App["⚙️ app\n(アプリサーバー)"]
+    DB["🗄️ db\nmysql"]
+    Cache["⚡ cache\nredis"]
+    Network(["🔗 Bridge Network\n自動生成"])
+    VolDB[("📀 db-data")]
+    VolCache[("📀 cache-data")]
+
+    Web --- Network
+    App --- Network
+    DB --- Network
+    Cache --- Network
+    DB -.- VolDB
+    Cache -.- VolCache
+  end
 ```
 
 ---
 
 ## Phase 4：Docker Swarm クラスタ
 
-```
-┌─────────────────────────────────────────────────┐
-│                 Swarm Cluster                    │
-│                                                  │
-│  ┌──────────────┐  ┌──────────────┐             │
-│  │ Manager Node │  │ Manager Node │             │
-│  │  (Leader)    │  │  (Follower)  │             │
-│  │              │◄─►              │  Raft 合意  │
-│  └──────┬───────┘  └──────────────┘             │
-│         │ タスクをスケジュール                    │
-│  ┌──────▼─────┐ ┌───────────┐ ┌───────────┐    │
-│  │ Worker 1   │ │ Worker 2  │ │ Worker 3  │    │
-│  │ [task1]    │ │ [task2]   │ │ [task3]   │    │
-│  │ [task4]    │ │           │ │           │    │
-│  └────────────┘ └───────────┘ └───────────┘    │
-└─────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+  subgraph Swarm["Swarm Cluster"]
+    subgraph Managers["Manager Nodes"]
+      M1["👑 Manager Node\nLeader"]
+      M2["Manager Node\nFollower"]
+      M1 <-->|"Raft 合意"| M2
+    end
+    M1 -->|"タスクをスケジュール"| W1
+    M1 --> W2
+    M1 --> W3
+    W1["🖥️ Worker 1\n[task1]\n[task4]"]
+    W2["🖥️ Worker 2\n[task2]"]
+    W3["🖥️ Worker 3\n[task3]"]
+  end
 ```
 
 ---
 
 ## Phase 5：Kubernetes アーキテクチャ
 
-```
-┌──────────────────────────────────────────────────────┐
-│                  Control Plane                        │
-│                                                       │
-│  kube-apiserver   etcd   scheduler   controller-mgr  │
-└──────────────────────────────────────────────────────┘
-           │ API
-┌──────────┼──────────────────────────────────────────┐
-│          │           Worker Nodes                    │
-│  ┌───────▼───────┐  ┌───────────────┐              │
-│  │   Node 1      │  │   Node 2      │              │
-│  │  kubelet      │  │  kubelet      │              │
-│  │  kube-proxy   │  │  kube-proxy   │              │
-│  │               │  │               │              │
-│  │  [Pod A]      │  │  [Pod B]      │              │
-│  │  [Pod A]      │  │  [Pod C]      │              │
-│  └───────────────┘  └───────────────┘              │
-└────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+  subgraph CP["☸️ Control Plane"]
+    direction LR
+    API["kube-apiserver"]
+    ETCD["etcd"]
+    Sched["scheduler"]
+    CM["controller-manager"]
+  end
+
+  subgraph N1["🖥️ Node 1"]
+    K1["kubelet / kube-proxy"]
+    PA1["Pod A"]
+    PA2["Pod A"]
+  end
+
+  subgraph N2["🖥️ Node 2"]
+    K2["kubelet / kube-proxy"]
+    PB["Pod B"]
+    PC["Pod C"]
+  end
+
+  API -->|"API"| N1
+  API -->|"API"| N2
 ```

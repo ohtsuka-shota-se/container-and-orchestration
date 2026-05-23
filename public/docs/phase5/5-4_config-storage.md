@@ -4,6 +4,7 @@
 
 - ConfigMap と Secret で設定・機密情報を外部化できる
 - PersistentVolume / PersistentVolumeClaim の関係を説明できる
+- StorageClass による動的プロビジョニングを使える
 - MySQL などステートフルなアプリを K8s で動かせる
 
 ---
@@ -32,6 +33,7 @@ data:
   DATABASE_HOST: "mysql-service"
   DATABASE_PORT: "3306"
   DATABASE_NAME: "myapp"
+  LOG_LEVEL: "INFO"
   # ファイル全体を値として持てる
   nginx.conf: |
     server {
@@ -40,12 +42,27 @@ data:
         proxy_pass http://web:5000;
       }
     }
+  app.properties: |
+    spring.datasource.url=jdbc:mysql://mysql-service:3306/myapp
+    logging.level.root=INFO
 ```
 
 ```bash
 kubectl apply -f configmap.yaml
 kubectl get configmap app-config
 kubectl describe configmap app-config
+
+# ConfigMap を編集
+kubectl edit configmap app-config
+
+# コマンドで作成
+kubectl create configmap my-config \
+  --from-literal=KEY1=VALUE1 \
+  --from-literal=KEY2=VALUE2
+
+# ファイルから作成
+kubectl create configmap nginx-conf \
+  --from-file=nginx.conf=/etc/nginx/nginx.conf
 ```
 
 ### Pod で ConfigMap を使う
@@ -56,6 +73,7 @@ spec:
   containers:
   - name: app
     image: flask-app:v1
+
     # 方法①: 環境変数として個別に読み込む
     env:
     - name: DATABASE_HOST
@@ -79,8 +97,12 @@ spec:
       name: app-config
       items:
       - key: nginx.conf
-        path: default.conf
+        path: default.conf   # マウント先のファイル名
 ```
+
+> **ConfigMap の自動更新：**  
+> ボリュームとしてマウントした ConfigMap は、更新すると数分以内にコンテナ内のファイルに反映される。  
+> ただし環境変数として読んだ場合は Pod の再起動が必要。
 
 > **LPIC との接続：**  
 > ConfigMap のマウントは `/etc` 以下の設定ファイルと同じ役割。
@@ -102,10 +124,15 @@ spec:
 > etcd に base64 エンコードで保存される（暗号化ではないことに注意）。
 
 ```bash
-# コマンドで Secret を作成
+# コマンドで Secret を作成（推奨：YAML に値が残らない）
 kubectl create secret generic db-secret \
   --from-literal=MYSQL_ROOT_PASSWORD=rootpass \
   --from-literal=MYSQL_PASSWORD=apppass
+
+# ファイルから Secret を作成
+kubectl create secret generic tls-secret \
+  --from-file=tls.crt=/path/to/cert.pem \
+  --from-file=tls.key=/path/to/key.pem
 
 # 確認
 kubectl get secret db-secret
@@ -126,6 +153,9 @@ type: Opaque
 data:
   MYSQL_ROOT_PASSWORD: cm9vdHBhc3M=   # echo -n "rootpass" | base64
   MYSQL_PASSWORD: YXBwcGFzcw==
+# または stringData を使うと base64 不要
+stringData:
+  MYSQL_ROOT_PASSWORD: "rootpass"     # 自動的に base64 エンコードされる
 ```
 
 ```yaml
@@ -136,11 +166,30 @@ spec:
     envFrom:
     - secretRef:
         name: db-secret
+    # または個別に読み込む
+    env:
+    - name: DB_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: db-secret
+          key: MYSQL_PASSWORD
 ```
+
+### Secret の種類
+
+| type | 用途 |
+|---|---|
+| `Opaque`（デフォルト） | 任意のデータ（パスワードなど） |
+| `kubernetes.io/tls` | TLS 証明書 |
+| `kubernetes.io/dockerconfigjson` | プライベートレジストリの認証情報 |
+| `kubernetes.io/service-account-token` | Service Account のトークン |
 
 > **⚠️ セキュリティ注意：**  
 > K8s の Secret は base64 エンコードされているだけで、暗号化ではない。  
-> 本番環境では etcd の暗号化 or 外部シークレット管理（Vault / AWS Secrets Manager）を使う。
+> 本番環境では以下を検討する：
+> - etcd の暗号化（Encryption at Rest）
+> - 外部シークレット管理（Vault / AWS Secrets Manager / GCP Secret Manager）
+> - External Secrets Operator（外部のシークレットマネージャーと K8s を同期）
 
 ---
 
@@ -184,7 +233,16 @@ Pod のコンテナ
 > どちらも「物理的な詳細を隠蔽して、使う側が気にしなくていい」設計
 > ```
 
-### マニフェストの例
+### アクセスモード
+
+| モード | 略称 | 説明 |
+|---|---|---|
+| ReadWriteOnce | RWO | 1 ノードから読み書き（最も一般的） |
+| ReadOnlyMany | ROX | 複数ノードから読み取り専用 |
+| ReadWriteMany | RWX | 複数ノードから読み書き（NFS, EFS など） |
+| ReadWriteOncePod | RWOP | 1 Pod からのみ（K8s 1.22 以降） |
+
+### マニフェストの例（手動 PV）
 
 ```yaml
 # pv.yaml（ローカル開発用）
@@ -192,11 +250,14 @@ apiVersion: v1
 kind: PersistentVolume
 metadata:
   name: mysql-pv
+  labels:
+    type: local
 spec:
   capacity:
     storage: 5Gi
   accessModes:
-    - ReadWriteOnce       # 1 つの Node からの読み書き
+    - ReadWriteOnce
+  reclaimPolicy: Retain   # PVC 削除後も PV を保持（Delete / Recycle も選択可）
   hostPath:
     path: /data/mysql     # minikube の Node 上のパス
 ```
@@ -213,6 +274,7 @@ spec:
   resources:
     requests:
       storage: 5Gi        # 5GB 以上の PV を要求
+  # storageClassName を指定しない場合、デフォルト StorageClass を使う
 ```
 
 ```yaml
@@ -236,26 +298,160 @@ kubectl apply -f pvc.yaml
 kubectl get pv
 kubectl get pvc
 # STATUS が Bound になれば PV と PVC がマッチした
+
+# PVC の詳細（どの PV にバインドされているか）
+kubectl describe pvc mysql-pvc
 ```
 
-### StorageClass（自動プロビジョニング）
+---
 
-本番環境では毎回 PV を手作りしない。StorageClass を使えば PVC 作成時に自動で PV が作られる：
+## 4. StorageClass（動的プロビジョニング）
+
+### 📖 用語：StorageClass
+
+> PVC 作成時に自動的に PV を作成（プロビジョニング）するための設定。  
+> 本番環境ではクラスタ管理者が PV を手作りせず、StorageClass を使う。
+
+```bash
+# 利用可能な StorageClass を確認
+kubectl get storageclass
+# NAME                 PROVISIONER                    RECLAIMRECLAIM POLICY
+# standard (default)   k8s.io/minikube-hostpath       Delete
+# gold                 kubernetes.io/aws-ebs          Retain
+
+# StorageClass の詳細
+kubectl describe storageclass standard
+```
 
 ```yaml
-# pvc.yaml（StorageClass を使う場合）
+# StorageClass の例（AWS EBS）
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-ssd
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer   # Pod がスケジュールされるまで PV 作成を待つ
+```
+
+```yaml
+# StorageClass を指定した PVC（PV を手作りしなくてよい）
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
 spec:
-  storageClassName: standard   # minikube のデフォルト StorageClass
+  storageClassName: fast-ssd   # または "standard"（minikube のデフォルト）
+  accessModes:
+    - ReadWriteOnce
   resources:
     requests:
-      storage: 5Gi
+      storage: 10Gi
 # PV を別途作らなくても自動的に作成される
 ```
 
+---
+
+## 5. MySQL を K8s で動かす（実践例）
+
 ```bash
-kubectl get storageclass
-# NAME                 PROVISIONER
-# standard (default)   k8s.io/minikube-hostpath
+mkdir -p ~/docker-practice/k8s-mysql
+cd ~/docker-practice/k8s-mysql
+```
+
+```yaml
+# mysql-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+stringData:
+  MYSQL_ROOT_PASSWORD: "rootpass"
+  MYSQL_DATABASE: "myapp"
+  MYSQL_USER: "appuser"
+  MYSQL_PASSWORD: "apppass"
+```
+
+```yaml
+# mysql-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+spec:
+  storageClassName: standard
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+```
+
+```yaml
+# mysql-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+spec:
+  replicas: 1   # MySQL は通常シングル（StatefulSet が本来推奨）
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - name: mysql
+        image: mysql:8.0
+        envFrom:
+        - secretRef:
+            name: mysql-secret
+        ports:
+        - containerPort: 3306
+        volumeMounts:
+        - name: mysql-storage
+          mountPath: /var/lib/mysql
+        readinessProbe:
+          exec:
+            command: ["mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$(MYSQL_ROOT_PASSWORD)"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      volumes:
+      - name: mysql-storage
+        persistentVolumeClaim:
+          claimName: mysql-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+spec:
+  selector:
+    app: mysql
+  ports:
+  - port: 3306
+    targetPort: 3306
+  type: ClusterIP
+```
+
+```bash
+kubectl apply -f mysql-secret.yaml
+kubectl apply -f mysql-pvc.yaml
+kubectl apply -f mysql-deployment.yaml
+
+kubectl get pods
+kubectl get pvc
+# STATUS: Bound になったら OK
+
+# MySQL に接続確認
+kubectl exec -it <mysql-pod-name> -- mysql -u appuser -papppass myapp
 ```
 
 ---
@@ -267,6 +463,9 @@ kubectl get storageclass
 - [ ] Secret が base64 エンコードであって暗号化ではないことを説明できる
 - [ ] PV と PVC の役割分担を LVM との対比で説明できる
 - [ ] `kubectl get pvc` で STATUS が Bound になったことを確認できる
+- [ ] StorageClass が動的プロビジョニングを実現することを説明できる
+- [ ] RWO / ROX / RWX のアクセスモードの違いを説明できる
+- [ ] `reclaimPolicy: Retain` と `Delete` の違いを説明できる
 
 ---
 

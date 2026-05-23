@@ -5,6 +5,7 @@
 - Docker Engine をインストールできる
 - `docker run hello-world` を実行し、裏側の流れを説明できる
 - イメージ・コンテナ・レジストリ・レイヤーの関係を図で説明できる
+- Union FS（オーバーレイファイルシステム）の仕組みを説明できる
 
 ---
 
@@ -68,7 +69,36 @@ docker version
 
 > **⚠️ セキュリティメモ**  
 > `docker` グループへの追加は実質的に root 権限と同等。  
-> 本番サーバーでの扱いには注意が必要。
+> 本番サーバーでの扱いには注意が必要。rootless モード（Podman や rootless Docker）が推奨される。
+
+### Windows / Mac の場合（Docker Desktop）
+
+| 環境 | インストール方法 |
+|---|---|
+| Windows | Docker Desktop をインストール → WSL2 バックエンドを有効化 |
+| Mac（Intel） | Docker Desktop dmg をインストール |
+| Mac（Apple Silicon） | Docker Desktop の ARM 版をインストール |
+
+**WSL2（Windows Subsystem for Linux 2）との連携：**
+
+```powershell
+# PowerShell で WSL2 を有効化
+wsl --install
+
+# Docker Desktop の設定 → Resources → WSL Integration で
+# 使用する WSL ディストリビューションを有効化する
+```
+
+WSL2 内の Linux ターミナルからも `docker` コマンドが使えるようになる。
+
+> **Docker Desktop vs Docker Engine の違い：**
+>
+> | | Docker Desktop | Docker Engine |
+> |---|---|---|
+> | 対象 | Mac / Windows | Linux |
+> | GUI | あり | なし |
+> | ライセンス | 商用利用は有料（条件あり） | 完全無料 |
+> | 仕組み | Linux VM を内包して動かす | ネイティブに Linux 上で動く |
 
 ---
 
@@ -101,15 +131,15 @@ Hello from Docker!
 ①  docker run hello-world
        ↓
 ②  Docker CLI → dockerd へ「hello-world を実行して」と要求
-
+       ↓ Unix socket (/var/run/docker.sock)
 ③  dockerd: ローカルに hello-world イメージがあるか確認
        → ない場合: Docker Hub からダウンロード（pull）
-
-④  イメージからコンテナを作成（create）
-
-⑤  コンテナを起動（start）
+       ↓
+④  containerd: イメージのレイヤーを展開
+       ↓
+⑤  runc: namespace/cgroup を設定してコンテナを起動
        → Hello from Docker! を出力して終了
-
+       ↓
 ⑥  コンテナ停止（Exited 状態に）
 ```
 
@@ -119,6 +149,24 @@ docker ps -a
 
 # CONTAINER ID   IMAGE         COMMAND    STATUS                    
 # a1b2c3d4e5f6   hello-world   "/hello"   Exited (0) 5 seconds ago 
+```
+
+### ステップごとに手動で確認してみる
+
+```bash
+# pull だけする
+docker pull nginx
+
+# create だけ（起動しない）
+docker create --name test-nginx nginx
+
+# start で起動
+docker start test-nginx
+
+# 確認
+docker ps
+
+# 実は run = pull（必要時） + create + start を 1 コマンドでやってくれる
 ```
 
 ---
@@ -152,6 +200,16 @@ docker ps -a
 > デフォルトは **Docker Hub**（`hub.docker.com`）。  
 > 企業では社内にプライベートレジストリを立てることも多い。
 
+主要なレジストリ：
+
+| レジストリ | 説明 |
+|---|---|
+| Docker Hub | `docker.io` — Docker 公式、最大のパブリックレジストリ |
+| GHCR | `ghcr.io` — GitHub Container Registry |
+| ECR | `xxx.dkr.ecr.*.amazonaws.com` — AWS |
+| GCR | `gcr.io` — Google Cloud |
+| ACR | `xxx.azurecr.io` — Azure |
+
 ```
 [Docker Hub]
     library/nginx:latest
@@ -182,32 +240,63 @@ nginx イメージ（例）
 
 ---
 
-## 5. イメージ・コンテナ・レジストリの関係図
+## 5. Union FS（ユニオンファイルシステム）
+
+### 📖 用語：Union FS / OverlayFS
+
+> 複数の読み取り専用レイヤーを重ねて、1 つのファイルシステムとして見せる仕組み。  
+> Docker はこれを使ってイメージレイヤーを実現している。
 
 ```
-Docker Hub（レジストリ）
-┌────────────────────────────┐
-│  nginx:latest              │
-│  mysql:8.0                 │
-│  python:3.12               │
-└────────────────────────────┘
-         ↓ docker pull（暗黙的に）
-ローカルのイメージストア
-┌────────────────────────────┐
-│  nginx:latest              │
-│  hello-world:latest        │
-└────────────────────────────┘
-         ↓ docker run
-実行中のコンテナ
-┌──────────┐  ┌──────────┐
-│  nginx-1 │  │  nginx-2 │
-│(port:80) │  │(port:81) │
-└──────────┘  └──────────┘
+コンテナ実行時のファイルシステム:
+
+┌──────────────────────────────┐
+│ 書き込み可能レイヤー（薄い）   │ ← コンテナが変更したファイルだけここに書かれる
+├──────────────────────────────┤
+│ Layer 4（読み取り専用）        │
+├──────────────────────────────┤
+│ Layer 3（読み取り専用）        │
+├──────────────────────────────┤
+│ Layer 2（読み取り専用）        │
+├──────────────────────────────┤
+│ Layer 1（読み取り専用）        │ ← 複数のイメージで共有
+└──────────────────────────────┘
+
+コンテナを削除すると「書き込み可能レイヤー」だけが消える
+→ イメージ（読み取り専用レイヤー）は残る
+```
+
+```bash
+# OverlayFS の実体を確認
+docker inspect nginx | grep -A10 "GraphDriver"
+# "LowerDir": "/var/lib/docker/overlay2/.../diff:..."  ← 読み取り専用レイヤー群
+# "UpperDir": "/var/lib/docker/overlay2/.../diff"      ← 書き込みレイヤー
+# "MergedDir": "/var/lib/docker/overlay2/.../merged"   ← 統合されたビュー
+```
+
+> **LPIC との接続：**  
+> `/proc` や `/sys` と同様、OverlayFS も「ファイルとして見えるが実態は違う」Linux の考え方。  
+> カーネルの `overlay` モジュールを使っており、`lsmod | grep overlay` で確認できる。
+
+---
+
+## 6. イメージ・コンテナ・レジストリの関係図
+
+```mermaid
+flowchart TD
+  Registry["☁️ Docker Hub（レジストリ）\nnginx:latest / mysql:8.0 / python:3.12"]
+  LocalStore["🗄️ ローカル イメージストア\n（読み取り専用レイヤーの集合）"]
+  C1["📦 nginx-1\n書き込みレイヤー + 共有レイヤー\nport:80"]
+  C2["📦 nginx-2\n書き込みレイヤー + 共有レイヤー\nport:81"]
+
+  Registry -->|"docker pull（暗黙的に）"| LocalStore
+  LocalStore -->|"docker run"| C1
+  LocalStore -->|"docker run"| C2
 ```
 
 ---
 
-## 6. よく使う確認コマンド
+## 7. よく使う確認コマンド
 
 ```bash
 # ローカルのイメージ一覧
@@ -221,9 +310,30 @@ docker ps -a
 
 # Dockerの全体的な情報（ストレージ使用量など）
 docker info
+# 特に見るべき項目:
+# Server Version: Docker のバージョン
+# Storage Driver: overlay2（推奨）
+# Docker Root Dir: /var/lib/docker（イメージが保存される場所）
+# Containers: 3 (Running: 1, Paused: 0, Stopped: 2)
+# Images: 5
 
-# ディスク使用量
+# ディスク使用量（詳細内訳）
 docker system df
+# TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+# Images          5         1         823MB     640MB (77%)
+# Containers      3         1         1.2kB     800B (66%)
+# Local Volumes   2         1         456MB     0B (0%)
+# Build Cache     10        0         234MB     234MB
+```
+
+### `docker info` で確認すべき項目
+
+```bash
+docker info | grep -E "Driver|Version|Namespace|Cgroup"
+# Storage Driver: overlay2          ← ファイルシステムドライバ
+# Cgroup Driver: systemd            ← cgroup 管理方式
+# Cgroup Version: 2                 ← cgroup v2（最新）
+# Default Runtime: runc             ← 低レベルランタイム
 ```
 
 ---
@@ -234,7 +344,9 @@ docker system df
 - [ ] イメージとコンテナの違いを「設計図と実体」で説明できる
 - [ ] レジストリがイメージの置き場であることを説明できる
 - [ ] レイヤー構造のメリット（共有によるディスク節約）を説明できる
+- [ ] Union FS / OverlayFS がなぜ「書き込みレイヤーだけ消える」のかを説明できる
 - [ ] `docker ps -a` と `docker images` の出力を読める
+- [ ] `docker system df` でディスク使用量を確認できる
 
 ---
 

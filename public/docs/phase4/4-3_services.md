@@ -5,6 +5,7 @@
 - Service を作成してレプリカを管理できる
 - ローリングアップデートとロールバックを実行できる
 - Global モードとレプリカモードを使い分けられる
+- 配置制約とリソース予約でタスクの配置先を制御できる
 
 ---
 
@@ -65,6 +66,9 @@ docker service inspect web --pretty
 # ログ（全タスク分）
 docker service logs -f web
 
+# 特定ノードのタスクのログ
+docker service logs -f web --raw   # タイムスタンプ付き
+
 # サービスを削除
 docker service rm web
 ```
@@ -122,11 +126,18 @@ After:
 docker service create \
   --name web \
   --replicas 3 \
-  --update-parallelism 1 \    # 一度に何台ずつ更新するか
-  --update-delay 10s \        # 更新間の待機時間
-  --update-failure-action rollback \  # 失敗したら自動ロールバック
+  --update-parallelism 1 \
+  --update-delay 10s \
+  --update-failure-action rollback \
+  --update-monitor 30s \
   --publish published=8080,target=80 \
   nginx:1.24-alpine
+
+# オプション解説:
+# --update-parallelism 1  : 一度に何台ずつ更新するか
+# --update-delay 10s      : 更新間の待機時間
+# --update-failure-action : 失敗時の動作（rollback / pause / continue）
+# --update-monitor 30s    : 更新後にこの時間監視して失敗判定
 
 # イメージを更新（ローリングアップデート実行）
 docker service update \
@@ -134,8 +145,11 @@ docker service update \
   web
 
 # アップデートの進行状況を見る
-docker service ps web
+watch docker service ps web
 # 古いタスクと新しいタスクが混在している様子が見える
+
+# 更新を一時停止
+docker service update --rollback-failure-action pause web
 ```
 
 ### ロールバック
@@ -146,6 +160,14 @@ docker service rollback web
 
 # 確認
 docker service ps web   # 1.24 に戻っているはず
+
+# ロールバック自体の設定も指定できる
+docker service create \
+  --name web \
+  --replicas 3 \
+  --rollback-parallelism 2 \   # ロールバックも 2 台ずつ
+  --rollback-delay 5s \
+  nginx:1.24-alpine
 ```
 
 ---
@@ -179,7 +201,79 @@ docker service ps log-agent
 
 ---
 
-## 6. VIP（サービスの負荷分散）
+## 6. 配置制約（Placement Constraints）
+
+```bash
+# node.role: タスクを配置するノードのロール
+docker service create \
+  --name web \
+  --constraint "node.role == worker" \   # Worker のみに配置
+  --replicas 3 \
+  nginx
+
+# node.labels: カスタムラベルで配置先を制御
+docker node update --label-add zone=us-east node1
+docker node update --label-add zone=us-west node2
+
+docker service create \
+  --name web-us-east \
+  --constraint "node.labels.zone == us-east" \
+  --replicas 2 \
+  nginx
+
+# node.hostname: 特定ホストにのみ配置
+docker service create \
+  --constraint "node.hostname == node1" \
+  --name db \
+  mysql:8.0
+
+# 複数の制約を AND で組み合わせ
+docker service create \
+  --constraint "node.role == worker" \
+  --constraint "node.labels.env == prod" \
+  --replicas 3 \
+  nginx
+```
+
+### 配置の優先設定（Placement Preferences）
+
+```bash
+# ノード間でバランスよく配置（Spread）
+docker service create \
+  --name web \
+  --placement-pref "spread=node.labels.zone" \   # zone ラベルでバランシング
+  --replicas 4 \
+  nginx
+
+# zone=us-east: 2台, zone=us-west: 2台 に自動配分される
+```
+
+---
+
+## 7. リソース制限と予約
+
+```bash
+# リソース制限を設定
+docker service create \
+  --name web \
+  --reserve-cpu 0.1 \     # このタスクのために 0.1 コアを予約
+  --reserve-memory 128m \ # このタスクのために 128MB を予約
+  --limit-cpu 0.5 \       # 最大 0.5 コアまで使用可
+  --limit-memory 256m \   # 最大 256MB まで使用可
+  --replicas 3 \
+  nginx
+
+# 予約（reserve）とは？
+# → スケジューラが「このノードには 0.1 コア空きがある」と判定するための保証
+# → 実際にリソースを確保するわけではない（soft limit）
+
+# 制限（limit）とは？
+# → コンテナが実際に使えるリソースの上限（cgroup で強制）
+```
+
+---
+
+## 8. VIP（サービスの負荷分散）
 
 ### 📖 用語：VIP（Virtual IP）
 
@@ -213,6 +307,8 @@ docker exec -it <タスクのコンテナID> nslookup web
 - [ ] `docker service rollback` でバージョンを戻せる
 - [ ] Global モードと Replicated モードの違いを説明できる
 - [ ] VIP がクライアントからどう見えるかを説明できる
+- [ ] `--constraint` でタスクの配置先を制御できる
+- [ ] `--reserve-cpu / --limit-cpu` の違いを説明できる
 
 ---
 

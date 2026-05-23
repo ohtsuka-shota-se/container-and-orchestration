@@ -5,6 +5,7 @@
 - 複数コンテナ管理の課題を説明できる
 - `compose.yaml` の基本構造を書ける
 - サービス・プロジェクト・依存関係の概念を説明できる
+- `profiles` でサービスを選択起動できる
 
 ---
 
@@ -22,6 +23,9 @@
 Phase 1 で学んだ `docker run` では：
 
 ```bash
+# ネットワークを作成
+docker network create mynet
+
 # MySQL を起動
 docker run -d \
   --name db \
@@ -45,6 +49,7 @@ docker run -d \
 - 起動順序を手動で管理しなければならない
 - 「全部止める」には `docker stop web db` と名前を全部覚える必要がある
 - ネットワークも手動で作る必要がある
+- チームへの共有が口頭や手順書に頼りがちになる
 
 ---
 
@@ -62,6 +67,18 @@ compose.yaml（設計図）
     ↓ docker compose down
 全コンテナ・ネットワークを一括削除
 ```
+
+> **バージョンについての注意：**  
+> 古い資料では `docker-compose`（ハイフンあり）と書かれていることがある。  
+> これは Python 製の旧バージョン（Compose V1）。現在は Go 製の `docker compose`（スペース）が標準。
+>
+> ```bash
+> # V1（非推奨・廃止済み）
+> docker-compose up
+>
+> # V2（現在の標準）
+> docker compose up
+> ```
 
 > **LPIC との接続：**  
 > systemd のサービス定義と構造がよく似ている。
@@ -141,14 +158,19 @@ services:
       context: ./app
       dockerfile: Dockerfile.prod
       target: prod         # マルチステージビルドのターゲット
+      args:
+        APP_VERSION: "1.0.0"   # ビルド引数
 ```
 
 ### `ports` — ポートマッピング
 
 ```yaml
 ports:
-  - "8080:80"       # ホスト:コンテナ（文字列推奨）
-  - "127.0.0.1:8080:80"  # ループバックのみ
+  - "8080:80"                  # ホスト:コンテナ（文字列推奨）
+  - "127.0.0.1:8080:80"        # ループバックのみ（セキュリティ向上）
+  - target: 80                  # 長い記法
+    published: "8080"
+    protocol: tcp
 ```
 
 ### `volumes` — ボリュームマウント
@@ -158,13 +180,16 @@ volumes:
   - db-data:/var/lib/mysql    # 名前付きボリューム
   - ./app:/app                # バインドマウント（相対パス可）
   - ./nginx.conf:/etc/nginx/nginx.conf:ro  # 読み取り専用
+  - type: bind                 # 長い記法
+    source: ./app
+    target: /app
 ```
 
 ### `environment` — 環境変数
 
 ```yaml
 environment:
-  MYSQL_ROOT_PASSWORD: secret     # 直接書く
+  MYSQL_ROOT_PASSWORD: secret     # 直接書く（⚠️ Git に上げるな）
   MYSQL_DATABASE: myapp
   # または
 environment:
@@ -202,6 +227,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s  # 起動直後のリトライを無視する猶予時間
 ```
 
 ### `restart` — 再起動ポリシー
@@ -213,9 +239,72 @@ restart: on-failure     # エラー終了時のみ再起動
 restart: unless-stopped # 手動 stop 以外は常に再起動
 ```
 
+### `logging` — ログドライバーの設定
+
+```yaml
+services:
+  web:
+    logging:
+      driver: json-file    # デフォルト（ローカルファイル）
+      options:
+        max-size: "10m"    # ログファイルの最大サイズ
+        max-file: "3"      # ローテーションするファイル数
+
+    # 外部ログ収集（Loki, Splunk など）への転送
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://loki:3100/loki/api/v1/push"
+        labels: "app=web"
+```
+
 ---
 
-## 5. はじめての compose.yaml を動かす
+## 5. profiles — サービスを選択的に起動する
+
+### 📖 用語：profiles
+
+> サービスにタグを付けて、起動するサービスのセットを切り替える機能。  
+> 例: 普段は `web + db` だけ起動して、デバッグ時だけ `phpmyadmin` を追加する。
+
+```yaml
+services:
+  web:
+    image: flask-app:latest
+    ports:
+      - "5000:5000"
+
+  db:
+    image: mysql:8.0
+    # profiles を指定しない → 常に起動
+
+  phpmyadmin:
+    image: phpmyadmin
+    profiles: [debug]   # ← "debug" プロファイルが有効なときだけ起動
+    ports:
+      - "8080:80"
+
+  redis:
+    image: redis:7
+    profiles: [cache, debug]   # 複数のプロファイルに属せる
+```
+
+```bash
+# 通常起動（profiles なしのサービスのみ）
+docker compose up -d
+# → web と db だけ起動
+
+# debug プロファイルを有効にして起動
+docker compose --profile debug up -d
+# → web, db, phpmyadmin, redis が起動
+
+# 複数のプロファイルを有効化
+docker compose --profile debug --profile cache up -d
+```
+
+---
+
+## 6. はじめての compose.yaml を動かす
 
 ```bash
 mkdir -p ~/docker-practice/compose-hello
@@ -229,6 +318,8 @@ services:
       - "8080:80"
     volumes:
       - ./html:/usr/share/nginx/html:ro
+    depends_on:
+      - db
 
   db:
     image: mysql:8.0
@@ -237,6 +328,17 @@ services:
       MYSQL_DATABASE: myapp
     volumes:
       - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+
+  adminer:
+    image: adminer
+    profiles: [debug]
+    ports:
+      - "8081:8080"
 
 volumes:
   db-data:
@@ -254,6 +356,10 @@ curl http://localhost:8080
 
 # ログ
 docker compose logs
+docker compose logs -f web   # web サービスのログだけ
+
+# デバッグ用 adminer も起動
+docker compose --profile debug up -d adminer
 
 # 全停止・削除
 docker compose down
@@ -272,6 +378,9 @@ docker compose ps
 # NAME                    IMAGE         ...
 # compose-hello-web-1     nginx:alpine
 # compose-hello-db-1      mysql:8.0
+
+# プロジェクト名を明示的に指定
+docker compose -p myproject up -d
 ```
 
 ---
@@ -282,6 +391,8 @@ docker compose ps
 - [ ] `services / volumes / networks` の役割を説明できる
 - [ ] `image` と `build` の使い分けを説明できる
 - [ ] `depends_on` の制限（Ready を待たない）を説明できる
+- [ ] `healthcheck + depends_on condition` で Ready を待てる
+- [ ] `profiles` でサービスを選択的に起動できる
 - [ ] `docker compose up -d` と `docker compose down` を使える
 
 ---

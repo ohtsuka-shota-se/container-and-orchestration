@@ -4,6 +4,7 @@
 
 - Compose が自動生成するネットワークの仕組みを説明できる
 - サービス名で名前解決できる理由を理解できる
+- ネットワークドライバの種類と使い分けを説明できる
 - 複数の Compose プロジェクト間でネットワーク・ボリュームを共有できる
 
 ---
@@ -31,14 +32,13 @@ docker network ls
 > Docker が作成する仮想スイッチ。同じネットワークに接続されたコンテナ同士は通信できる。  
 > Compose は全サービスを自動的に同じネットワークに接続する。
 
-```
-compose.yaml の全サービス
-┌──────────────────────────────────────────┐
-│           myproject_default ネットワーク  │
-│                                          │
-│   web コンテナ       db コンテナ         │
-│   IP: 172.18.0.2    IP: 172.18.0.3      │
-└──────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  subgraph Net["myproject_default ネットワーク"]
+    Web["🌐 web コンテナ\nIP: 172.18.0.2"]
+    DB["🗄️ db コンテナ\nIP: 172.18.0.3"]
+    Web <-->|"サービス名で通信可"| DB
+  end
 ```
 
 ---
@@ -92,7 +92,34 @@ docker compose exec web nslookup db
 
 ---
 
-## 3. ネットワークの分離
+## 3. ネットワークドライバの種類
+
+Compose で使えるネットワークドライバ：
+
+| ドライバ | 説明 | 用途 |
+|---|---|---|
+| `bridge`（デフォルト） | 仮想ブリッジを作成。同じホスト上のコンテナ間通信 | 通常の Compose |
+| `host` | ホストのネットワークをそのまま使う | パフォーマンス優先時 |
+| `none` | ネットワークなし（完全隔離） | セキュリティ重視 |
+| `overlay` | 複数ホスト間をまたぐネットワーク | Docker Swarm 用 |
+| `macvlan` | コンテナに物理 NIC の MAC アドレスを割り当て | ネットワーク機器との直接通信 |
+
+```yaml
+# ネットワークドライバを指定
+networks:
+  mynet:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: "custom-bridge"   # ブリッジ名を指定
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24   # IP レンジを指定
+          gateway: 192.168.100.1
+```
+
+---
+
+## 4. ネットワークの分離
 
 すべてのサービスを同じネットワークに入れたくない場合は、ネットワークを分けられる：
 
@@ -131,11 +158,23 @@ networks:
 ```
 
 > **セキュリティ上の意味：** db コンテナは front-net に繋がっていないので、  
-> frontend から直接 DB に接続することができない。
+> frontend から直接 DB に接続することができない。  
+> XSS などで frontend が乗っ取られても DB への直接アクセスを防げる。
+
+```bash
+# ネットワーク分離を確認
+# frontend から db に直接 ping できないことを確認
+docker compose exec frontend ping db
+# ping: bad address 'db'  ← front-net に db がいないので解決できない
+
+# backend からは db に繋がる
+docker compose exec backend ping db
+# PING db (172.20.0.3) ...
+```
 
 ---
 
-## 4. Compose のボリューム管理
+## 5. Compose のボリューム管理
 
 ### 名前付きボリュームの宣言
 
@@ -150,10 +189,16 @@ services:
     image: redis:7
     volumes:
       - redis-data:/data
+      - ./redis.conf:/etc/redis/redis.conf:ro   # 設定ファイルのバインドマウント
 
 # トップレベルで宣言が必要
 volumes:
   db-data:
+    driver: local             # デフォルト
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/mysql     # ホストのパスを指定（特定のディスクに置く場合）
   redis-data:
 ```
 
@@ -173,7 +218,51 @@ docker compose down -v
 docker volume ls   # なくなった
 ```
 
-### 外部ボリューム（別プロジェクトと共有）
+### バインドマウントのオプション
+
+```yaml
+volumes:
+  # 基本形
+  - ./src:/app
+
+  # 読み取り専用
+  - ./config:/app/config:ro
+
+  # 長い記法（より明示的）
+  - type: bind
+    source: ./src
+    target: /app
+    read_only: false
+
+  # selinux ラベル（SELinux 環境での権限問題を解決）
+  - ./data:/app/data:z   # z = shared, Z = private
+```
+
+### tmpfs（メモリ上の一時ボリューム）
+
+```yaml
+services:
+  web:
+    image: flask-app
+    tmpfs:
+      - /tmp              # /tmp をメモリ上に
+      - /run:size=100m    # /run をメモリ上に（サイズ制限付き）
+    # または volumes で指定
+    volumes:
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 100000000   # 100MB
+```
+
+> **tmpfs の用途：**
+> - 機密情報（セッショントークンなど）を一時的に扱う
+> - 大量の一時ファイルを高速に処理する（ディスク I/O を避ける）
+> - テスト用の一時データを格納する
+
+---
+
+## 6. 外部ボリューム（別プロジェクトと共有）
 
 ```yaml
 volumes:
@@ -182,9 +271,16 @@ volumes:
     name: mycompany_shared_volume
 ```
 
+```bash
+# 事前に共有ボリュームを作成しておく
+docker volume create mycompany_shared_volume
+
+# 複数の compose.yaml から同じボリュームを参照できる
+```
+
 ---
 
-## 5. 複数 Compose プロジェクト間の接続
+## 7. 複数 Compose プロジェクト間の接続
 
 別々の `compose.yaml` で管理するサービス同士を繋げたいケース：
 
@@ -203,6 +299,7 @@ networks:
 
 services:
   api:
+    image: flask-api:latest
     networks:
       - backend-net
 ```
@@ -216,8 +313,21 @@ networks:
 
 services:
   web:
+    image: nginx:alpine
     networks:
       - backend-net
+    # 同じネットワークにいるので "api" というサービス名で通信できる
+```
+
+```bash
+# backend を先に起動
+cd ~/projects/backend && docker compose up -d
+
+# frontend を起動
+cd ~/projects/frontend && docker compose up -d
+
+# frontend から backend の api サービスに接続できる
+docker compose -p frontend exec web curl http://api:5000/
 ```
 
 ---
@@ -225,9 +335,11 @@ services:
 ## ✅ 振り返りチェックリスト
 
 - [ ] Compose が自動でネットワークを作ることを説明できる
-- [ ] サービス名で名前解決できる仕組み（Docker DNS）を説明できる
+- [ ] サービス名で名前解決できる仕組み（Docker DNS: 127.0.0.11）を説明できる
 - [ ] ネットワークを分けてサービスを隔離する方法を書ける
+- [ ] bridge / host / none / overlay のネットワークドライバの違いを説明できる
 - [ ] `docker compose down` と `docker compose down -v` の違いを説明できる
+- [ ] `tmpfs` の用途（一時的な機密データ・高速 I/O）を説明できる
 - [ ] `external: true` の使い方を説明できる
 
 ---

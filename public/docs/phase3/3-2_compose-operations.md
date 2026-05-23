@@ -5,6 +5,7 @@
 - Compose の主要コマンドを使いこなせる
 - `.env` ファイルで環境変数を外部化できる
 - `compose.override.yaml` で開発/本番を切り替えられる
+- `docker compose watch` でファイル変更を自動反映できる
 
 ---
 
@@ -38,14 +39,20 @@ docker compose logs -f
 # 特定サービスのログだけ
 docker compose logs -f web
 
+# 末尾 100 行だけ
+docker compose logs --tail 100 web
+
 # 全サービスの状態確認
 docker compose ps
+
+# 詳細情報（ポート・ヘルスチェックの状態など）
+docker compose ps --all
 
 # サービス内でコマンド実行
 docker compose exec web bash
 docker compose exec db mysql -u root -psecret myapp
 
-# サービスを再起動
+# サービスを再起動（設定変更時など）
 docker compose restart web
 
 # イメージを再ビルド（Dockerfile を変更した場合）
@@ -54,6 +61,16 @@ docker compose up -d --build   # ビルドして起動を同時に
 
 # スケールアウト（同一サービスを複数起動）
 docker compose up -d --scale web=3
+
+# 特定サービスだけ一時停止・再開
+docker compose pause web
+docker compose unpause web
+
+# 設定ファイルの検証（構文チェック）
+docker compose config
+
+# 設定ファイルの展開結果を確認（変数展開後）
+docker compose config --no-interpolate
 ```
 
 > **LPIC との接続：**  
@@ -65,6 +82,7 @@ docker compose up -d --scale web=3
 > systemctl status myapp  ≈  docker compose ps
 > journalctl -u   myapp  ≈  docker compose logs -f
 > systemctl restart myapp ≈  docker compose restart
+> systemctl reload myapp  ≈  docker compose exec web kill -HUP 1
 > ```
 >
 > 「アプリ全体を 1 サービスとして管理する systemctl」として捉えると、  
@@ -128,10 +146,10 @@ docker compose config
 # 変数名だけ書いたサンプルファイルを Git で共有
 cat > .env.example << 'EOF'
 MYSQL_ROOT_PASSWORD=
-MYSQL_DATABASE=
+MYSQL_DATABASE=myapp
 MYSQL_USER=
 MYSQL_PASSWORD=
-APP_PORT=
+APP_PORT=5000
 EOF
 
 # チームメンバーはこれをコピーして値を埋める
@@ -147,6 +165,21 @@ services:
     env_file:
       - .env           # 共通
       - .env.local     # ローカル個別設定（.gitignore に追加）
+    environment:
+      # env_file より environment が優先される
+      DEBUG: "true"
+```
+
+### 環境変数の優先順位
+
+優先度が高い順：
+
+```
+1. docker compose up -e KEY=VALUE   # コマンドライン引数
+2. compose.yaml の environment:     # ファイル内の直接指定
+3. compose.yaml の env_file:        # .env ファイル参照
+4. シェルの環境変数（export KEY=VALUE）
+5. .env ファイル（自動読み込み）
 ```
 
 ---
@@ -210,6 +243,10 @@ services:
     restart: always
     environment:
       FLASK_ENV: production
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 ```
 
 ```bash
@@ -218,11 +255,68 @@ docker compose up -d
 
 # 本番環境（compose.yaml + compose.prod.yaml を明示指定）
 docker compose -f compose.yaml -f compose.prod.yaml up -d
+
+# 設定のマージ結果を確認
+docker compose config
+docker compose -f compose.yaml -f compose.prod.yaml config
 ```
 
 ---
 
-## 4. ヘルスチェック
+## 4. docker compose watch（ファイル変更の自動反映）
+
+### 📖 用語：docker compose watch
+
+> ファイルシステムの変更を監視して、自動的にコンテナを更新する機能（Compose v2.20 以降）。  
+> 従来のバインドマウントによるホットリロードの代替・補完として使える。
+
+```yaml
+# compose.yaml
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    develop:
+      watch:
+        # app.py が変わったら sync（コンテナへのファイルコピー）
+        - action: sync
+          path: ./app.py
+          target: /app/app.py
+
+        # requirements.txt が変わったら rebuild
+        - action: rebuild
+          path: ./requirements.txt
+
+        # テンプレートが変わったら sync
+        - action: sync
+          path: ./templates
+          target: /app/templates
+
+        # .env が変わったらコンテナを再起動
+        - action: sync+restart
+          path: ./.env
+          target: /app/.env
+```
+
+```bash
+# watch モードで起動（変更を監視し続ける）
+docker compose watch
+# ファイルを変更すると自動的にコンテナへ反映される
+
+# バックグラウンドで起動しつつ watch も有効にする
+docker compose up --watch
+```
+
+| action | 動作 | 用途 |
+|---|---|---|
+| `sync` | ファイルをコンテナにコピー | スクリプト・テンプレート |
+| `rebuild` | イメージを再ビルドして再起動 | 依存関係の変更 |
+| `sync+restart` | sync 後にコンテナを再起動 | 設定ファイルの変更 |
+
+---
+
+## 5. ヘルスチェック
 
 ```yaml
 services:
@@ -245,7 +339,34 @@ services:
 # ヘルスチェックの状態確認
 docker compose ps
 # STATUS に (healthy) / (unhealthy) / (starting) が表示される
+
+# 詳細（最後のチェック結果など）
+docker inspect <コンテナID> | grep -A 20 "Health"
 ```
+
+---
+
+## 6. run コマンド（一時的なタスク実行）
+
+```bash
+# サービスのコンテナを一時的に起動してコマンドを実行（終了後削除）
+docker compose run --rm web python manage.py migrate
+
+# ポートマッピングなし、依存サービスなしで起動
+docker compose run --no-deps --rm web bash
+
+# 環境変数を追加して実行
+docker compose run --rm -e DEBUG=true web pytest
+```
+
+> **`exec` vs `run` の使い分け：**
+>
+> | コマンド | 用途 |
+> |---|---|
+> | `exec` | すでに起動しているコンテナにコマンドを実行する |
+> | `run` | 新しいコンテナを起動してコマンドを実行し、終了後削除する |
+>
+> DB マイグレーション・テスト実行など「一発タスク」には `run --rm` が向いている。
 
 ---
 
@@ -256,6 +377,8 @@ docker compose ps
 - [ ] `.gitignore` に `.env` を追加することの重要性を説明できる
 - [ ] `compose.override.yaml` の自動マージの仕組みを説明できる
 - [ ] ヘルスチェックと `depends_on condition` を組み合わせられる
+- [ ] `docker compose watch` でファイル変更を自動反映できる
+- [ ] `run --rm` と `exec` の使い分けを説明できる
 
 ---
 
