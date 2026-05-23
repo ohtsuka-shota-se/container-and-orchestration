@@ -5,5 +5,5 @@ import react from '@vitejs/plugin-react'
 // 例: https://username.github.io/docker-curriculum/ の場合 "/docker-curriculum/"
 export default defineConfig({
   plugins: [react()],
-  base: '/docker-curriculum/',
+  base: '/container-and-orchestration/',
 })
