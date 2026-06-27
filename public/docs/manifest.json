@@ -71,7 +71,8 @@
         { "id": "appendix/cheatsheet-phase2-5", "label": "チートシート Phase 2-5","icon": "📋" },
         { "id": "appendix/glossary",            "label": "用語集",                "icon": "📖" },
         { "id": "appendix/troubleshooting",     "label": "トラブル対応",          "icon": "🚑" },
-        { "id": "appendix/architecture-diagrams","label": "アーキテクチャ図集",   "icon": "🗺️" }
+        { "id": "appendix/architecture-diagrams","label": "アーキテクチャ図集",   "icon": "🗺️" },
+        { "id": "appendix/zabbix-monitoring",    "label": "Zabbix 監視ハンズオン", "icon": "📡" }
       ]
     }
   ]
